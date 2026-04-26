@@ -35,10 +35,10 @@ def initialize_model(model_id: str = "google/gemma-2-9b-it"):
     llm = LLM(
         model=model_id, 
         tensor_parallel_size=1, 
-        dtype="half", # Для T4 (Colab)
+        dtype="bfloat16",
         gpu_memory_utilization=0.9, 
         max_model_len=4096, 
-        # quantization="awq" # раскомментируйте, если используете квантованную модель
+        quantization="awq",
     )
     return llm
 
@@ -69,8 +69,8 @@ def save_results(df: pd.DataFrame, generated_prompts: list, output_file: str):
 
 def main():
     # 1. Настройка путей
-    input_file = '../../Data/processed_posts.csv'
-    output_file = '../../Data/processed_posts_with_prompts.csv'
+    input_file = '../drive/MyDrive/Диплом/datasets/processed_posts.csv'
+    output_file = '../drive/MyDrive/Диплом/datasets/processed_posts_with_prompts.csv'
     
     # 2. Загрузка
     df = load_data(input_file)
@@ -81,7 +81,7 @@ def main():
     formatted_prompts = format_prompts(texts, system_prompt)
     
     # 4. Инициализация модели
-    model_id = "google/gemma-2-9b-it" 
+    model_id = "google/gemma-4-E2B-it" 
     llm = initialize_model(model_id)
     
     # 5. Генерация
