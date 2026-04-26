@@ -38,7 +38,7 @@ def initialize_model(model_id: str = "google/gemma-2-9b-it"):
         dtype="bfloat16",
         gpu_memory_utilization=0.9, 
         max_model_len=4096, 
-        quantization="awq",
+        #quantization="awq",
     )
     return llm
 
