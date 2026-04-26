@@ -13,7 +13,7 @@ def load_data(input_file: str) -> pd.DataFrame:
             input_file = 'processed_posts.csv'
             
     print(f"Загрузка данных из {input_file}...")
-    df = pd.read_csv(input_file)
+    df = pd.read_csv(input_file, sep=';')
     return df
 
 def format_prompts(texts: list, system_prompt: str) -> list:
@@ -64,7 +64,7 @@ def generate_responses(llm: LLM, formatted_prompts: list, max_tokens: int = 512)
 def save_results(df: pd.DataFrame, generated_prompts: list, output_file: str):
     """Сохраняет результаты в новый CSV файл."""
     df['promt'] = generated_prompts
-    df.to_csv(output_file, index=False)
+    df.to_csv(output_file, index=False, sep=';')
     print(f"Успешно сохранено в {output_file}")
 
 def main():
