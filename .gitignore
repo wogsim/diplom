@@ -3,5 +3,8 @@
 *.xlsx
 *.venv
 *.pyc
+*.jsonl
+*.vscode
 agent
+
 
