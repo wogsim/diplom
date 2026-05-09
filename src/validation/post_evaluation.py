@@ -1,12 +1,11 @@
 """
-Ранжирование сгенерированных постов с помощью LLM (слепая оценка).
+Оценка сгенерированных постов с помощью LLM (слепая оценка с якорем).
 
-Для каждого промта берёт три генерации (base, sft, ipo) и создаёт ВСЕ 6
-возможных перестановок (3! = 6), присваивая временные ID «Текст 1/2/3».
-Это устраняет позиционное смещение (position bias) модели-судьи.
+Для каждого промта берёт три генерации (base, sft, ipo), сравнивает их
+с оригинальным текстом (ground truth). Использует все 6 перестановок
+для устранения позиционного смещения.
 
-Результаты агрегируются: для каждой строки подсчитывается средний ранг
-каждой модели по всем 6 перестановкам.
+Модель-судья оценивает фактологическую точность и качество текста.
 
 Предназначен для запуска в Google Colab с GPU.
 """
@@ -28,63 +27,50 @@ OUTPUT_PATH = '../drive/MyDrive/diplom/datasets/evaluation_comparison_ranked.csv
 # Модель-судья (отличается от моделей-генераторов для объективности)
 JUDGE_MODEL = "google/gemma-4-26B-A4B-it"
 
-# Маппинг категорий на человекочитаемые названия
-CATEGORY_NAMES = {
-    "tech_guide": "Технический гайд",
-    "case_study": "Кейс/Внедрение",
-    "product_update": "Продукт/Анонс",
-    "market_news": "Новости/Аналитика",
-    "expert_opinion": "Мнение эксперта",
-    "other": "Другое",
-}
-
 # Все модели
 MODELS = ["base", "sft", "ipo"]
 
 # Все 6 перестановок троек моделей
 ALL_PERMUTATIONS = list(permutations(MODELS))  # 3! = 6
 
-# ─── Промт для ранжирования ──────────────────────────────────────────────────
+# ─── Промт для оценки ────────────────────────────────────────────────────────
 
-RANKING_PROMPT_TEMPLATE = """Ты — Senior IT-маркетолог. Оцени три варианта Telegram-поста для B2B ИТ-аудитории.
-Категория поста: {category_name}
+EVAL_PROMPT_TEMPLATE = """Ты — главный редактор ИТ-медиа. Твоя задача — выбрать лучший вариант Telegram-поста, сравнив три генерации с исходным текстом.
 
-Критерии оценки:
-1. Отсутствие 'инфоцыганства' и пустых восторгов.
-2. Точность терминологии (K8s, CI/CD, SLA и т.д.).
-3. Наличие четкой ценности для бизнеса (ROI, оптимизация, безопасность).
-4. Читаемость и структура (уместность эмодзи, абзацы).
+ИСХОДНЫЙ ТЕКСТ (Якорь):
+{ground_truth_text}
 
-[Текст 1]
-{text_1}
+ВАРИАНТЫ ДЛЯ СРАВНЕНИЯ:
+[Вариант 1]: {text_1}
 
-[Текст 2]
-{text_2}
+[Вариант 2]: {text_2}
 
-[Текст 3]
-{text_3}
+[Вариант 3]: {text_3}
 
-Твоя задача — отранжировать тексты от лучшего (1 место) к худшему (3 место). 
-Ответ выдай строго в формате JSON:
+ИНСТРУКЦИЯ ПО ОЦЕНКЕ:
+1. Фактологическая точность (Anchor Check): Текст должен сохранить все ключевые факты, цифры и ИТ-термины из Исходного текста. Штрафуй за потерю конкретики.
+2. Отсутствие "воды": Штрафуй за бессодержательные клише ("высокие стандарты", "инновационный прорыв"), которых нет в Исходном тексте.
+3. Доменная адаптация: Текст должен выглядеть как профессиональный пост для B2B ИТ-рынка (структура, читаемость, уместный стиль).
+4. Качество выше оригинала: Если генерация исправила косноязычие оригинала, сохранив смысл — это плюс. Если генерация размыла смысл ради красоты — это минус.
+
+Твой ответ должен быть строго в формате JSON:
 {{
-  "1st_place": "Текст X",
-  "2nd_place": "Текст Y",
-  "3rd_place": "Текст Z",
-  "reasoning": "Краткое обоснование, почему победитель лучше остальных, и в чем главная ошибка текста на 3-м месте."
+  "winner": "Вариант X",
+  "reasoning": "Четкое обоснование: что победитель сохранил из оригинала, и почему проигравшие (особенно IPO/SFT версии) не справились (например, добавили воды или потеряли факты).",
+  "fact_retention_score": 0,
+  "writing_quality_score": 0
 }}"""
 
 
-def build_ranking_prompt(category: str, perm: tuple, texts: dict[str, str]) -> str:
+def build_eval_prompt(ground_truth: str, perm: tuple, texts: dict[str, str]) -> str:
     """
     Собирает промт для одной перестановки.
 
     perm — кортеж из 3 ключей моделей, например ("sft", "base", "ipo")
     texts — dict {"base": "...", "sft": "...", "ipo": "..."}
     """
-    category_name = CATEGORY_NAMES.get(category, category or "Неизвестная")
-
-    return RANKING_PROMPT_TEMPLATE.format(
-        category_name=category_name,
+    return EVAL_PROMPT_TEMPLATE.format(
+        ground_truth_text=ground_truth,
         text_1=texts[perm[0]],
         text_2=texts[perm[1]],
         text_3=texts[perm[2]],
@@ -107,27 +93,27 @@ def prepare_all_prompts(
     all_meta = []
 
     for row_idx, row in df.iterrows():
+        ground_truth = str(row.get('real_post', '')).strip()
         base_text = str(row.get('generated_base', '')).strip()
         sft_text = str(row.get('generated_sft', '')).strip()
         ipo_text = str(row.get('generated_ipo', '')).strip()
-        category = str(row.get('category', 'other'))
 
-        # Пропускаем строки, где хотя бы одна генерация пустая
-        if not base_text or not sft_text or not ipo_text:
+        # Пропускаем строки, где хотя бы один текст пустой
+        if not ground_truth or not base_text or not sft_text or not ipo_text:
             continue
 
         texts = {"base": base_text, "sft": sft_text, "ipo": ipo_text}
 
         # Генерируем промт для каждой из 6 перестановок
         for perm in ALL_PERMUTATIONS:
-            # perm = (model_for_text1, model_for_text2, model_for_text3)
+            # perm = (model_for_variant1, model_for_variant2, model_for_variant3)
             label_to_model = {
-                "Текст 1": perm[0],
-                "Текст 2": perm[1],
-                "Текст 3": perm[2],
+                "Вариант 1": perm[0],
+                "Вариант 2": perm[1],
+                "Вариант 3": perm[2],
             }
 
-            user_message = build_ranking_prompt(category, perm, texts)
+            user_message = build_eval_prompt(ground_truth, perm, texts)
             messages = [{"role": "user", "content": user_message}]
 
             chat_prompt = tokenizer.apply_chat_template(
@@ -144,13 +130,18 @@ def prepare_all_prompts(
     return all_prompts, all_meta
 
 
-def parse_ranking_response(
+def parse_eval_response(
     response: str,
     label_to_model: dict[str, str],
 ) -> dict | None:
     """
-    Извлекает ранжирование из JSON-ответа и маппит обратно на модели.
-    Возвращает dict {"rank_1": model, "rank_2": model, "rank_3": model}
+    Извлекает результат оценки из JSON-ответа и маппит обратно на модели.
+
+    Возвращает dict с ключами:
+      winner — имя модели (base/sft/ipo)
+      fact_retention_score — оценка 1-10
+      writing_quality_score — оценка 1-10
+      reasoning — обоснование
     или None при ошибке парсинга.
     """
     if not response or not response.strip():
@@ -163,75 +154,93 @@ def parse_ranking_response(
     try:
         parsed = json.loads(json_match.group())
 
-        places = {}
-        for place_key, rank_key in [("1st_place", "rank_1"),
-                                     ("2nd_place", "rank_2"),
-                                     ("3rd_place", "rank_3")]:
-            label = parsed.get(place_key, "").strip()
-            text_num = re.search(r'(\d)', label)
-            if text_num:
-                normalized_label = f"Текст {text_num.group(1)}"
-                model = label_to_model.get(normalized_label)
-                places[rank_key] = model
-            else:
-                return None
-
-        models = [places["rank_1"], places["rank_2"], places["rank_3"]]
-        if None in models or len(set(models)) != 3:
+        # Извлекаем победителя
+        winner_label = parsed.get("winner", "").strip()
+        # Нормализация: "Вариант 1", "вариант 1", "Variant 1" и т.д.
+        variant_num = re.search(r'(\d)', winner_label)
+        if not variant_num:
             return None
 
-        return places
+        normalized_label = f"Вариант {variant_num.group(1)}"
+        winner_model = label_to_model.get(normalized_label)
+        if winner_model is None:
+            return None
+
+        # Извлекаем оценки
+        fact_score = parsed.get("fact_retention_score")
+        writing_score = parsed.get("writing_quality_score")
+
+        if fact_score is not None:
+            fact_score = max(1, min(10, int(fact_score)))
+        if writing_score is not None:
+            writing_score = max(1, min(10, int(writing_score)))
+
+        reasoning = str(parsed.get("reasoning", "")).strip()
+
+        return {
+            "winner": winner_model,
+            "fact_retention_score": fact_score,
+            "writing_quality_score": writing_score,
+            "reasoning": reasoning,
+        }
 
     except (json.JSONDecodeError, ValueError, TypeError, KeyError):
         return None
 
 
-def aggregate_rankings(row_results: list[dict]) -> dict:
+def aggregate_results(row_results: list[dict]) -> dict:
     """
     Агрегирует результаты всех перестановок для одной строки.
 
-    row_results — список dict'ов {"rank_1": model, "rank_2": model, "rank_3": model}
+    row_results — список dict'ов из parse_eval_response
 
     Возвращает:
-    - avg_rank: средний ранг каждой модели
-    - win_count: кол-во 1-х мест
-    - best_model: модель с наименьшим средним рангом
+    - win_count: кол-во побед каждой модели
+    - avg_fact_score / avg_writing_score: средние оценки победителя
+    - best_model: модель с наибольшим числом побед
     - num_valid: сколько перестановок удалось распарсить
     """
-    rank_sums = {"base": 0, "sft": 0, "ipo": 0}
-    rank_counts = {"base": 0, "sft": 0, "ipo": 0}
     win_counts = {"base": 0, "sft": 0, "ipo": 0}
+    fact_scores = {"base": [], "sft": [], "ipo": []}
+    writing_scores = {"base": [], "sft": [], "ipo": []}
 
     for result in row_results:
-        for rank_key, rank_val in [("rank_1", 1), ("rank_2", 2), ("rank_3", 3)]:
-            model = result[rank_key]
-            rank_sums[model] += rank_val
-            rank_counts[model] += 1
-            if rank_val == 1:
-                win_counts[model] += 1
+        winner = result["winner"]
+        win_counts[winner] += 1
+
+        if result["fact_retention_score"] is not None:
+            fact_scores[winner].append(result["fact_retention_score"])
+        if result["writing_quality_score"] is not None:
+            writing_scores[winner].append(result["writing_quality_score"])
 
     num_valid = len(row_results)
-    avg_ranks = {}
-    for model in MODELS:
-        if rank_counts[model] > 0:
-            avg_ranks[model] = rank_sums[model] / rank_counts[model]
-        else:
-            avg_ranks[model] = None
 
-    # Лучшая модель = наименьший средний ранг
-    best_model = min(
-        (m for m in MODELS if avg_ranks[m] is not None),
-        key=lambda m: avg_ranks[m],
-        default=None,
-    )
+    # Лучшая модель = больше всего побед; при равенстве — первая в порядке
+    best_model = max(MODELS, key=lambda m: win_counts[m])
+
+    # Средние оценки (только для побед данной модели)
+    avg_fact = {}
+    avg_writing = {}
+    for model in MODELS:
+        avg_fact[model] = (
+            sum(fact_scores[model]) / len(fact_scores[model])
+            if fact_scores[model] else None
+        )
+        avg_writing[model] = (
+            sum(writing_scores[model]) / len(writing_scores[model])
+            if writing_scores[model] else None
+        )
 
     return {
-        "avg_rank_base": avg_ranks["base"],
-        "avg_rank_sft": avg_ranks["sft"],
-        "avg_rank_ipo": avg_ranks["ipo"],
         "wins_base": win_counts["base"],
         "wins_sft": win_counts["sft"],
         "wins_ipo": win_counts["ipo"],
+        "avg_fact_base": avg_fact["base"],
+        "avg_fact_sft": avg_fact["sft"],
+        "avg_fact_ipo": avg_fact["ipo"],
+        "avg_writing_base": avg_writing["base"],
+        "avg_writing_sft": avg_writing["sft"],
+        "avg_writing_ipo": avg_writing["ipo"],
         "best_model": best_model,
         "num_valid_perms": num_valid,
     }
@@ -245,14 +254,10 @@ def main():
     print(f"Колонки: {df.columns.tolist()}")
 
     # Проверяем наличие нужных колонок
-    required_cols = ['generated_base', 'generated_sft', 'generated_ipo']
+    required_cols = ['real_post', 'generated_base', 'generated_sft', 'generated_ipo']
     for col in required_cols:
         if col not in df.columns:
             raise ValueError(f"Колонка '{col}' не найдена в данных!")
-
-    if 'category' not in df.columns:
-        print("ВНИМАНИЕ: колонка 'category' не найдена — используем 'other' по умолчанию")
-        df['category'] = 'other'
 
     # ── 2. Инициализация токенизатора ─────────────────────────────────────────
     print(f"\nИнициализация токенизатора для {JUDGE_MODEL}...")
@@ -268,8 +273,8 @@ def main():
     print(f"\nИнициализация vLLM с моделью {JUDGE_MODEL}...")
     llm = LLM(
         model=JUDGE_MODEL,
-        max_model_len=4096 * 4,
-        gpu_memory_utilization=0.95,
+        max_model_len=4096 * 8,
+        gpu_memory_utilization=0.97,
         tensor_parallel_size=1,
         #quantization='bitsandbytes',     # 4-bit квантизация (NF4)
         #load_format='bitsandbytes',
@@ -282,14 +287,13 @@ def main():
         repetition_penalty=1.0,
     )
 
-    # ── 5. Генерация ранжирований (один большой батч) ─────────────────────────
-    print(f"\nНачало ранжирования ({len(all_prompts)} запросов)...")
+    # ── 5. Генерация оценок (один большой батч) ──────────────────────────────
+    print(f"\nНачало оценки ({len(all_prompts)} запросов)...")
     outputs = llm.generate(all_prompts, sampling_params)
 
     # ── 6. Парсинг и группировка по строкам ───────────────────────────────────
     print("Парсинг ответов модели...")
 
-    # Группируем результаты по row_idx
     from collections import defaultdict
     row_results = defaultdict(list)
 
@@ -301,7 +305,7 @@ def main():
         label_to_model = meta["label_to_model"]
         row_idx = meta["row_idx"]
 
-        result = parse_ranking_response(response_text, label_to_model)
+        result = parse_eval_response(response_text, label_to_model)
         if result is not None:
             row_results[row_idx].append(result)
             total_parsed += 1
@@ -315,10 +319,10 @@ def main():
     # ── 7. Агрегация результатов ──────────────────────────────────────────────
     print("Агрегация результатов по всем перестановкам...")
 
-    # Инициализируем колонки
     result_cols = [
-        'avg_rank_base', 'avg_rank_sft', 'avg_rank_ipo',
         'wins_base', 'wins_sft', 'wins_ipo',
+        'avg_fact_base', 'avg_fact_sft', 'avg_fact_ipo',
+        'avg_writing_base', 'avg_writing_sft', 'avg_writing_ipo',
         'best_model', 'num_valid_perms',
     ]
     for col in result_cols:
@@ -330,7 +334,7 @@ def main():
         if not results:
             continue
 
-        agg = aggregate_rankings(results)
+        agg = aggregate_results(results)
         rows_with_results += 1
 
         for col in result_cols:
@@ -340,7 +344,7 @@ def main():
 
     # ── 8. Статистика ─────────────────────────────────────────────────────────
     print("\n" + "=" * 60)
-    print("РЕЗУЛЬТАТЫ СЛЕПОГО РАНЖИРОВАНИЯ (LLM-as-a-Judge)")
+    print("РЕЗУЛЬТАТЫ СЛЕПОЙ ОЦЕНКИ (LLM-as-a-Judge с якорем)")
     print(f"Все 6 перестановок, агрегация по {rows_with_results} строкам")
     print("=" * 60)
 
@@ -348,23 +352,16 @@ def main():
     total = len(ranked_df)
 
     if total > 0:
-        # Общий Win Rate (по best_model — победитель агрегации)
-        print(f"\nОбщий Win Rate (лучшая модель по среднему рангу):")
+        # Общий Win Rate (best_model — победитель агрегации)
+        print(f"\nОбщий Win Rate (лучшая модель по числу побед):")
         for model in MODELS:
             wins = (ranked_df['best_model'] == model).sum()
             pct = wins / total * 100
             bar = '█' * int(pct / 2)
             print(f"  {model:6s}: {wins:5d} ({pct:5.1f}%) {bar}")
 
-        # Средний ранг по всему датасету
-        print(f"\nСредний ранг (1=лучший, 3=худший):")
-        for model in MODELS:
-            col = f'avg_rank_{model}'
-            mean_rank = ranked_df[col].astype(float).mean()
-            print(f"  {model:6s}: {mean_rank:.3f}")
-
-        # Суммарные 1-е места по всем перестановкам
-        print(f"\nСуммарные 1-е места (из {total * 6} макс. голосов):")
+        # Суммарные победы по всем перестановкам
+        print(f"\nСуммарные победы (из {total * 6} макс. голосов):")
         for model in MODELS:
             col = f'wins_{model}'
             total_wins = ranked_df[col].astype(int).sum()
@@ -373,7 +370,27 @@ def main():
             bar = '█' * int(pct / 2)
             print(f"  {model:6s}: {total_wins:5d} ({pct:5.1f}%) {bar}")
 
-        # Среднее кол-во успешных парсингов на строку
+        # Средние оценки fact_retention
+        print(f"\nСредний Fact Retention Score (при победах модели):")
+        for model in MODELS:
+            col = f'avg_fact_{model}'
+            valid = ranked_df[col].dropna().astype(float)
+            if len(valid) > 0:
+                print(f"  {model:6s}: {valid.mean():.2f}/10  (n={len(valid)})")
+            else:
+                print(f"  {model:6s}: —")
+
+        # Средние оценки writing_quality
+        print(f"\nСредний Writing Quality Score (при победах модели):")
+        for model in MODELS:
+            col = f'avg_writing_{model}'
+            valid = ranked_df[col].dropna().astype(float)
+            if len(valid) > 0:
+                print(f"  {model:6s}: {valid.mean():.2f}/10  (n={len(valid)})")
+            else:
+                print(f"  {model:6s}: —")
+
+        # Среднее кол-во успешных парсингов
         avg_valid = ranked_df['num_valid_perms'].astype(float).mean()
         print(f"\nСреднее кол-во валидных перестановок на строку: {avg_valid:.1f}/6")
 
