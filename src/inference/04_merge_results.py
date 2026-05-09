@@ -3,12 +3,12 @@ from pathlib import Path
 
 def main():
     # Настройки путей
-    TEST_DATA_PATH = '../drive/MyDrive/Диплом/datasets/processed_posts_with_prompts_test.csv'
-    BASE_RESULTS = '../drive/MyDrive/Диплом/datasets/generated_base.csv'
-    SFT_RESULTS = '../drive/MyDrive/Диплом/datasets/generated_sft.csv'
-    IPO_RESULTS = '../drive/MyDrive/Диплом/datasets/generated_ipo.csv'
+    TEST_DATA_PATH = '../drive/MyDrive/diplom/datasets/processed_posts_with_prompts_test.csv'
+    BASE_RESULTS = '../drive/MyDrive/diplom/datasets/generated_base.csv'
+    SFT_RESULTS = '../drive/MyDrive/diplom/datasets/generated_sft.csv'
+    IPO_RESULTS = '../drive/MyDrive/diplom/datasets/generated_ipo.csv'
     
-    FINAL_OUTPUT = '../drive/MyDrive/Диплом/datasets/evaluation_comparison.csv'
+    FINAL_OUTPUT = '../drive/MyDrive/diplom/datasets/evaluation_comparison.csv'
 
     print("Чтение исходного тестового датасета...")
     df_test = pd.read_csv(TEST_DATA_PATH, sep=";")

@@ -5,8 +5,8 @@ from pathlib import Path
 
 def main():
     # Настройки путей (адаптируйте под свой Google Drive)
-    TEST_DATA_PATH = '../drive/MyDrive/Диплом/datasets/processed_posts_with_prompts_test.csv'
-    OUTPUT_PATH = '../drive/MyDrive/Диплом/datasets/generated_base.csv'
+    TEST_DATA_PATH = '../drive/MyDrive/diplom/datasets/processed_posts_with_prompts_test.csv'
+    OUTPUT_PATH = '../drive/MyDrive/diplom/datasets/generated_base.csv'
     
     # Имя базовой модели
     MODEL_PATH = "google/gemma-4-E2B-it" # Или другая ваша базовая модель (например, google/gemma-2-2b-it)
