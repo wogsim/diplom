@@ -11,7 +11,7 @@ def main():
     
     # Укажите путь к базовой модели и путь к сохраненному LoRA адаптеру IPO
     BASE_MODEL_PATH = "google/gemma-4-E2B-it" # Или другая ваша базовая модель
-    LORA_PATH = "../drive/MyDrive/diplom/diplom/Models/gemma-4-E2B-it-IPO" # ПУТЬ К ПАПКЕ С adapter_config.json
+    LORA_PATH = "../drive/MyDrive/diplom/diplom/Models/gemma-4-e2b-it-IPO" # ПУТЬ К ПАПКЕ С adapter_config.json
 
     print(f"Загрузка тестовых данных из {TEST_DATA_PATH}")
     df = pd.read_csv(TEST_DATA_PATH, sep=";")
