@@ -22,7 +22,7 @@ INPUT_PATH = '../drive/MyDrive/diplom/datasets/evaluation_comparison.csv'
 OUTPUT_PATH = '../drive/MyDrive/diplom/datasets/evaluation_comparison_classified.csv'
 
 # Модель-судья
-JUDGE_MODEL = "google/gemma-4-E2B-it"
+JUDGE_MODEL = "google/gemma-4-26B-A4B-it"
 
 # Допустимые категории для валидации
 VALID_CATEGORIES = {
