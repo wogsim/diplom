@@ -153,6 +153,8 @@ def main():
         max_model_len=4096,
         gpu_memory_utilization=0.90,
         tensor_parallel_size=1,
+        #quantization='bitsandbytes',     # 4-bit квантизация (NF4)
+        #load_format='bitsandbytes',
     )
 
     # Настройки генерации (низкая температура для стабильной классификации)
